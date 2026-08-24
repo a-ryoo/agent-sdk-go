@@ -77,6 +77,12 @@ type toolResult struct {
 	message  interfaces.Message
 	failed   bool // true: hard err, ExecuteTool err, or ctx cancel
 	executed bool // true only when Tool.Execute completed successfully
+	fatal    error
+}
+
+func fatalToolError(err error) bool {
+	var fatal interfaces.FatalToolError
+	return errors.As(err, &fatal) && fatal.Fatal()
 }
 
 func terminalToolCall(tools []interfaces.Tool, calls []base.ToolCallRequest) (bool, error) {
@@ -507,6 +513,11 @@ func (rt *LocalRuntime) executeToolsParallel(
 			defer wg.Done()
 			result, err := rt.executeSingleTool(ctx, input, messageID, iteration, tc, policies, emit)
 			if err != nil {
+				if fatalToolError(err) {
+					result.fatal = err
+					results[idx] = result
+					return
+				}
 				rt.logger.Info(ctx, "local: parallel tool failed",
 					slog.String("scope", "loop"),
 					slog.Int("toolIndex", idx),
@@ -524,6 +535,11 @@ func (rt *LocalRuntime) executeToolsParallel(
 		}(i, toolCalls[i])
 	}
 	wg.Wait()
+	for _, result := range results {
+		if result.fatal != nil {
+			return nil, result.fatal
+		}
+	}
 
 	return results, nil
 }
@@ -547,6 +563,9 @@ func (rt *LocalRuntime) executeToolsSequential(
 	for idx, tc := range toolCalls {
 		result, err := rt.executeSingleTool(ctx, input, messageID, iteration, tc, policies, emit)
 		if err != nil {
+			if fatalToolError(err) {
+				return nil, err
+			}
 			rt.logger.Info(ctx, "local: sequential tool failed",
 				slog.String("scope", "loop"),
 				slog.Int("toolIndex", idx),
@@ -800,6 +819,9 @@ func (rt *LocalRuntime) executeSingleTool(
 				}, input.MemoryScope)
 			})
 			if execErr != nil {
+				if fatalToolError(execErr) {
+					return toolResult{failed: true}, execErr
+				}
 				content = "Tool execution failed: " + execErr.Error()
 				failed = true
 			} else {

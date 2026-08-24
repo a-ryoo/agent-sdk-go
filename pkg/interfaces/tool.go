@@ -22,6 +22,12 @@ type ToolTerminal interface {
 	Terminal() bool
 }
 
+// FatalToolError is an opt-in tool error that stops the run instead of being returned to the LLM.
+type FatalToolError interface {
+	error
+	Fatal() bool
+}
+
 // ToolAuthorizer is an optional interface for tools that enforce programmatic authorization.
 // When implemented, the agent checks Authorize before approval/Execute in the tool call flow.
 // Return a decision with Allow=true/false and optional deny metadata.

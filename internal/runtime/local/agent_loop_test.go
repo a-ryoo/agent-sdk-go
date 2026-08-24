@@ -64,6 +64,11 @@ type retryTerminalTool struct {
 	calls atomic.Int32
 }
 
+type fatalToolErr string
+
+func (err fatalToolErr) Error() string { return string(err) }
+func (fatalToolErr) Fatal() bool       { return true }
+
 func (t *retryTerminalTool) Execute(context.Context, map[string]any) (any, error) {
 	if t.calls.Add(1) == 1 {
 		return nil, errors.New("invalid result")
@@ -335,6 +340,18 @@ func TestExecuteAgentLoop_TerminalToolFailureAtLimitFailsRun(t *testing.T) {
 
 	_, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
 	require.EqualError(t, err, `terminal tool "submit_result" did not complete before max iterations`)
+}
+
+func TestExecuteAgentLoop_FatalToolErrorStopsRun(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{
+		ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "submit_result"}},
+	}}}
+	tool := terminalStubTool{stubTool{name: "submit_result", execErr: fatalToolErr("protocol budget exhausted")}}
+	rt, tools := newLoopRT(t, 5, client, tool)
+
+	_, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.EqualError(t, err, "protocol budget exhausted")
+	require.Equal(t, 1, client.call)
 }
 
 func TestExecuteAgentLoop_TerminalToolMustBeOnlyCall(t *testing.T) {
