@@ -59,6 +59,18 @@ type terminalStubTool struct{ stubTool }
 
 func (terminalStubTool) Terminal() bool { return true }
 
+type retryTerminalTool struct {
+	terminalStubTool
+	calls atomic.Int32
+}
+
+func (t *retryTerminalTool) Execute(context.Context, map[string]any) (any, error) {
+	if t.calls.Add(1) == 1 {
+		return nil, errors.New("invalid result")
+	}
+	return "corrected", nil
+}
+
 func (t stubKindTool) ToolKind() types.ToolKind { return t.kind }
 
 // testToolCall builds a ToolCallRequest with ToolKind set (matches stubTool → native).
@@ -279,12 +291,34 @@ func TestExecuteAgentLoop_TerminalToolEndsRun(t *testing.T) {
 	require.Equal(t, 1, client.call)
 }
 
+func TestExecuteAgentLoop_TerminalToolCorrectsTextResponse(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{
+		{Content: "done without submitting"},
+		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "submit_result"}}},
+	}}
+	tool := terminalStubTool{stubTool{name: "submit_result", result: "submitted"}}
+	rt, tools := newLoopRT(t, 2, client, tool)
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.NoError(t, err)
+	require.Equal(t, "submitted", result.Content)
+}
+
+func TestExecuteAgentLoop_TerminalToolRequiredAtLimit(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{Content: "done without submitting"}}}
+	tool := terminalStubTool{stubTool{name: "submit_result", result: "submitted"}}
+	rt, tools := newLoopRT(t, 1, client, tool)
+
+	_, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.EqualError(t, err, `terminal tool "submit_result" was not called before max iterations`)
+}
+
 func TestExecuteAgentLoop_TerminalToolFailureContinues(t *testing.T) {
 	client := &seqLLMClient{responses: []*interfaces.LLMResponse{
 		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "submit_result"}}},
-		{Content: "corrected"},
+		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c2", ToolName: "submit_result"}}},
 	}}
-	tool := terminalStubTool{stubTool{name: "submit_result", execErr: errors.New("invalid result")}}
+	tool := &retryTerminalTool{terminalStubTool: terminalStubTool{stubTool{name: "submit_result"}}}
 	rt, tools := newLoopRT(t, 2, client, tool)
 
 	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})

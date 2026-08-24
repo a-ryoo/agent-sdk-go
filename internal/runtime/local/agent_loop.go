@@ -24,6 +24,7 @@ const (
 	msgToolRejected            = "Tool execution was rejected by the user."
 	msgToolApprovalUnavailable = "Tool approval could not be completed because no approval handler is configured; continuing without running the tool."
 	msgToolUnauthorized        = "Tool execution was denied by authorization policy."
+	msgTerminalToolRequired    = "Finish by calling exactly one terminal tool."
 )
 
 // AgentLoopInput holds per-run execution inputs for one local agent run.
@@ -94,6 +95,15 @@ func terminalToolCall(tools []interfaces.Tool, calls []base.ToolCallRequest) (bo
 		return true, nil
 	}
 	return false, nil
+}
+
+func terminalToolName(tools []interfaces.Tool) string {
+	for _, tool := range tools {
+		if terminal, ok := tool.(interfaces.ToolTerminal); ok && terminal.Terminal() {
+			return tool.Name()
+		}
+	}
+	return ""
 }
 
 // publishEventToChannel marshals ev and publishes it on channelName via the runtime eventbus.
@@ -291,12 +301,19 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			return &AgentLoopResult{Content: lastContent, LLMUsage: llmUsage, Telemetry: telemetry}, budgetErr
 		}
 
-		// Final response: no tool calls → done.
+		// Final response: no tool calls → done unless a terminal tool is required.
 		if len(llmResult.ToolCalls) == 0 {
 			messages = append(messages, interfaces.Message{
 				Role:    interfaces.MessageRoleAssistant,
 				Content: llmResult.Content,
 			})
+			if name := terminalToolName(tools); name != "" {
+				if iter == maxIter-1 {
+					return nil, fmt.Errorf("terminal tool %q was not called before max iterations", name)
+				}
+				messages = append(messages, interfaces.Message{Role: interfaces.MessageRoleSystem, Content: msgTerminalToolRequired})
+				continue
+			}
 			lastContent = llmResult.Content
 			break
 		}
