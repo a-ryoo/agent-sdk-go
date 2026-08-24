@@ -1,3 +1,4 @@
+// Modified by a-ryoo for Digger: supports fail-closed terminal tools.
 package local
 
 import (
@@ -72,8 +73,27 @@ type AgentLoopResult struct {
 }
 
 type toolResult struct {
-	message interfaces.Message
-	failed  bool // true: hard err, ExecuteTool err, or ctx cancel
+	message  interfaces.Message
+	failed   bool // true: hard err, ExecuteTool err, or ctx cancel
+	executed bool // true only when Tool.Execute completed successfully
+}
+
+func terminalToolCall(tools []interfaces.Tool, calls []base.ToolCallRequest) (bool, error) {
+	for _, call := range calls {
+		tool, ok := base.FindToolByName(tools, call.ToolName)
+		if !ok {
+			continue
+		}
+		terminal, ok := tool.(interfaces.ToolTerminal)
+		if !ok || !terminal.Terminal() {
+			continue
+		}
+		if len(calls) != 1 {
+			return false, fmt.Errorf("terminal tool %q must be the only tool call", call.ToolName)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // publishEventToChannel marshals ev and publishes it on channelName via the runtime eventbus.
@@ -281,8 +301,13 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 			break
 		}
 
+		terminal, err := terminalToolCall(tools, llmResult.ToolCalls)
+		if err != nil {
+			return nil, err
+		}
+
 		// Max iterations: re-run without tools for a final answer.
-		if iter == maxIter-1 {
+		if iter == maxIter-1 && !terminal {
 			log.Info(ctx, "local: max iterations reached, forcing final LLM call without tools",
 				slog.String("scope", "loop"),
 				slog.Int("iteration", iter))
@@ -378,6 +403,13 @@ func (rt *LocalRuntime) executeAgentLoop(ctx context.Context, input AgentLoopInp
 					telemetry.Storage.TotalMemoryStores++
 				}
 			}
+		}
+		if terminal && toolResults[0].executed {
+			lastContent = toolResults[0].message.Content
+			break
+		}
+		if terminal && iter == maxIter-1 {
+			return nil, fmt.Errorf("terminal tool %q did not complete before max iterations", llmResult.ToolCalls[0].ToolName)
 		}
 
 		// Nested sub-agents accumulate into the shared tracker during their run.
@@ -675,6 +707,7 @@ func (rt *LocalRuntime) executeSingleTool(
 
 	var content string
 	failed := false
+	executed := false
 	switch approvalStatus {
 	case types.ApprovalStatusApproved:
 		if isSubAgent {
@@ -754,6 +787,7 @@ func (rt *LocalRuntime) executeSingleTool(
 				failed = true
 			} else {
 				content = result
+				executed = true
 			}
 		}
 	case types.ApprovalStatusRejected:
@@ -775,7 +809,8 @@ func (rt *LocalRuntime) executeSingleTool(
 			ToolName:   tc.ToolName,
 			ToolCallID: tc.ToolCallID,
 		},
-		failed: failed,
+		failed:   failed,
+		executed: executed,
 	}, nil
 }
 

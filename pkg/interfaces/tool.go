@@ -1,3 +1,4 @@
+// Modified by a-ryoo for Digger: adds terminal tool semantics.
 package interfaces
 
 import (
@@ -13,6 +14,12 @@ import (
 // WithToolApprovalPolicy overrides this tool-level default when set.
 type ToolApproval interface {
 	ApprovalRequired() bool
+}
+
+// ToolTerminal is an optional interface for tools whose successful result is the final agent result.
+// A terminal tool must be the only tool call in an LLM response.
+type ToolTerminal interface {
+	Terminal() bool
 }
 
 // ToolAuthorizer is an optional interface for tools that enforce programmatic authorization.

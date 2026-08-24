@@ -1,3 +1,4 @@
+// Modified by a-ryoo for Digger: verifies terminal tool semantics.
 package local
 
 import (
@@ -53,6 +54,10 @@ type stubKindTool struct {
 	stubTool
 	kind types.ToolKind
 }
+
+type terminalStubTool struct{ stubTool }
+
+func (terminalStubTool) Terminal() bool { return true }
 
 func (t stubKindTool) ToolKind() types.ToolKind { return t.kind }
 
@@ -259,6 +264,58 @@ func TestExecuteAgentLoop_ToolCallThenFinalAnswer(t *testing.T) {
 	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "add"})
 	require.NoError(t, err)
 	require.Equal(t, "sum is 7", result.Content)
+}
+
+func TestExecuteAgentLoop_TerminalToolEndsRun(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{
+		ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "submit_result"}},
+	}}}
+	tool := terminalStubTool{stubTool{name: "submit_result", result: `{"status":"completed"}`}}
+	rt, tools := newLoopRT(t, 1, client, tool)
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.NoError(t, err)
+	require.Equal(t, `{"status":"completed"}`, result.Content)
+	require.Equal(t, 1, client.call)
+}
+
+func TestExecuteAgentLoop_TerminalToolFailureContinues(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{
+		{ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "submit_result"}}},
+		{Content: "corrected"},
+	}}
+	tool := terminalStubTool{stubTool{name: "submit_result", execErr: errors.New("invalid result")}}
+	rt, tools := newLoopRT(t, 2, client, tool)
+
+	result, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.NoError(t, err)
+	require.Equal(t, "corrected", result.Content)
+}
+
+func TestExecuteAgentLoop_TerminalToolFailureAtLimitFailsRun(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{
+		ToolCalls: []*interfaces.ToolCall{{ToolCallID: "c1", ToolName: "submit_result"}},
+	}}}
+	tool := terminalStubTool{stubTool{name: "submit_result", execErr: errors.New("invalid result")}}
+	rt, tools := newLoopRT(t, 1, client, tool)
+
+	_, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.EqualError(t, err, `terminal tool "submit_result" did not complete before max iterations`)
+}
+
+func TestExecuteAgentLoop_TerminalToolMustBeOnlyCall(t *testing.T) {
+	client := &seqLLMClient{responses: []*interfaces.LLMResponse{{ToolCalls: []*interfaces.ToolCall{
+		{ToolCallID: "c1", ToolName: "write"},
+		{ToolCallID: "c2", ToolName: "submit_result"},
+	}}}}
+	tools := []interfaces.Tool{
+		stubTool{name: "write", result: "written"},
+		terminalStubTool{stubTool{name: "submit_result", result: "done"}},
+	}
+	rt, _ := newLoopRT(t, 2, client, tools...)
+
+	_, err := runLoop(context.Background(), rt, tools, AgentLoopInput{UserPrompt: "finish"})
+	require.EqualError(t, err, `terminal tool "submit_result" must be the only tool call`)
 }
 
 func TestExecuteAgentLoop_ToolTelemetry_Success(t *testing.T) {
