@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -205,6 +206,22 @@ func TestMessagesToOpenAI_assistantToolFunctionNamesNeverEmpty(t *testing.T) {
 			t.Fatalf("expected fallback name 'tool' when ToolName is empty, got %q", names[0])
 		}
 	})
+}
+
+func TestMessagesToOpenAIImages(t *testing.T) {
+	messages := messagesToOpenAI(&interfaces.LLMRequest{Messages: []interfaces.Message{
+		{Role: interfaces.MessageRoleUser, Content: "inspect", Images: []interfaces.Image{{MIME: "image/png", Data: "cG5n"}}},
+		{Role: interfaces.MessageRoleTool, Content: "captured", ToolCallID: "call-1", Images: []interfaces.Image{{MIME: "image/jpeg", Data: "anBn"}}},
+	}})
+
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if len(messages) != 3 || !strings.Contains(text, "data:image/png;base64,cG5n") || !strings.Contains(text, "data:image/jpeg;base64,anBn") {
+		t.Fatalf("messages = %s", text)
+	}
 }
 
 func assistantToolFunctionNames(messages []openai.ChatCompletionMessageParamUnion) []string {

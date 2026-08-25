@@ -21,6 +21,7 @@ const (
 type Message struct {
 	Role    MessageRole `json:"role"`
 	Content string      `json:"content"`
+	Images  []Image     `json:"images,omitempty"`
 
 	ToolName   string      `json:"tool_name"`
 	ToolCallID string      `json:"tool_call_id"`
@@ -28,6 +29,12 @@ type Message struct {
 
 	Metadata  map[string]any `json:"metadata"`
 	CreatedAt time.Time      `json:"created_at"`
+}
+
+// Image is a base64-encoded image attached to a conversation message.
+type Image struct {
+	MIME string `json:"mime"`
+	Data string `json:"data"`
 }
 
 type Conversation interface {

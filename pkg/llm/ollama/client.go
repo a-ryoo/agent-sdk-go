@@ -130,6 +130,9 @@ func (c *Client) buildCompletionParams(messages []openai.ChatCompletionMessagePa
 	if req.MaxTokens > 0 {
 		params.MaxTokens = param.NewOpt(int64(req.MaxTokens))
 	}
+	if req.ContextTokens > 0 {
+		params.SetExtraFields(map[string]any{"options": map[string]int{"num_ctx": req.ContextTokens}})
+	}
 	if req.TopP != nil {
 		params.TopP = param.NewOpt(*req.TopP)
 	}
@@ -176,7 +179,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 		slog.Bool("hasSystemMessage", req.SystemMessage != ""))
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, llm.NormalizeHTTPError(err)
 	}
 	var contentLen int
 	var toolNames []string
@@ -220,7 +223,7 @@ type ollamaStreamAdapter struct {
 }
 
 func (a *ollamaStreamAdapter) Next() bool { return a.stream.Next() }
-func (a *ollamaStreamAdapter) Err() error { return a.stream.Err() }
+func (a *ollamaStreamAdapter) Err() error { return llm.NormalizeHTTPError(a.stream.Err()) }
 func (a *ollamaStreamAdapter) Current() *interfaces.LLMStreamChunk {
 	chunk := a.stream.Current()
 	a.acc.AddChunk(chunk)
@@ -317,7 +320,7 @@ func messagesToOllama(req *interfaces.LLMRequest) []openai.ChatCompletionMessage
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "user":
-			out = append(out, openai.UserMessage(m.Content))
+			out = append(out, ollamaUserMessage(m.Content, m.Images))
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
 				toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, len(m.ToolCalls))
@@ -352,9 +355,30 @@ func messagesToOllama(req *interfaces.LLMRequest) []openai.ChatCompletionMessage
 			}
 		case "tool":
 			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
+			if len(m.Images) > 0 {
+				out = append(out, ollamaUserMessage("", m.Images))
+			}
 		}
 	}
 	return out
+}
+
+func ollamaUserMessage(content string, images []interfaces.Image) openai.ChatCompletionMessageParamUnion {
+	if len(images) == 0 {
+		return openai.UserMessage(content)
+	}
+
+	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(images)+1)
+	if content != "" {
+		parts = append(parts, openai.TextContentPart(content))
+	}
+	for _, image := range images {
+		parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+			URL: "data:" + image.MIME + ";base64," + image.Data,
+		}))
+	}
+
+	return openai.UserMessage(parts)
 }
 
 func toolsToOllama(specs []interfaces.ToolSpec) []openai.ChatCompletionToolUnionParam {

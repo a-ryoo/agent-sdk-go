@@ -63,10 +63,11 @@ type LLMRequest struct {
 	Messages []Message
 
 	// Sampling (per-request; typically set from agent config). nil/0 = provider default.
-	Temperature *float64 // 0-2 OpenAI, 0-1 Anthropic; also Gemini
-	MaxTokens   int      // 0 = provider default
-	TopP        *float64 // 0-1; OpenAI and Gemini (Anthropic client does not set TopP)
-	TopK        *int     // Anthropic only
+	Temperature   *float64 // 0-2 OpenAI, 0-1 Anthropic; also Gemini
+	MaxTokens     int      // 0 = provider default
+	ContextTokens int      // Ollama context window; 0 = provider default
+	TopP          *float64 // 0-1; OpenAI and Gemini (Anthropic client does not set TopP)
+	TopK          *int     // Anthropic only
 
 	// Reasoning configures generic reasoning/thinking when non-nil; each LLM client maps fields to its API.
 	Reasoning *LLMReasoning

@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/agenticenv/agent-sdk-go/pkg/interfaces"
@@ -239,6 +240,22 @@ func TestMessagesToOllama_AssistantToolCallsAndToolResult(t *testing.T) {
 	}
 }
 
+func TestMessagesToOllamaImages(t *testing.T) {
+	messages := messagesToOllama(&interfaces.LLMRequest{Messages: []interfaces.Message{
+		{Role: interfaces.MessageRoleUser, Content: "inspect", Images: []interfaces.Image{{MIME: "image/png", Data: "cG5n"}}},
+		{Role: interfaces.MessageRoleTool, Content: "captured", ToolCallID: "call-1", Images: []interfaces.Image{{MIME: "image/jpeg", Data: "anBn"}}},
+	}})
+
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if len(messages) != 3 || !strings.Contains(text, "data:image/png;base64,cG5n") || !strings.Contains(text, "data:image/jpeg;base64,anBn") {
+		t.Fatalf("messages = %s", text)
+	}
+}
+
 func TestToolsToOllama(t *testing.T) {
 	specs := []interfaces.ToolSpec{
 		{Name: "search", Description: "search the web", Parameters: interfaces.JSONSchema{"type": "object"}},
@@ -290,6 +307,7 @@ func TestBuildCompletionParams(t *testing.T) {
 		Temperature:    &temp,
 		TopP:           &topP,
 		MaxTokens:      50,
+		ContextTokens:  32768,
 		Tools:          []interfaces.ToolSpec{{Name: "fn"}},
 		ResponseFormat: &interfaces.ResponseFormat{Type: interfaces.ResponseFormatJSON},
 	}
@@ -311,5 +329,9 @@ func TestBuildCompletionParams(t *testing.T) {
 	}
 	if params.ResponseFormat.OfJSONObject == nil {
 		t.Fatal("response format should be json_object")
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil || !strings.Contains(string(encoded), `"options":{"num_ctx":32768}`) {
+		t.Fatalf("params = %s, error = %v", encoded, err)
 	}
 }

@@ -139,7 +139,7 @@ func (c *Client) Generate(ctx context.Context, req *interfaces.LLMRequest) (*int
 		slog.Bool("hasSystemMessage", req.SystemMessage != ""))
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, llm.NormalizeHTTPError(err)
 	}
 	var contentLen int
 	var toolNames []string
@@ -183,7 +183,7 @@ type openAIStreamAdapter struct {
 }
 
 func (a *openAIStreamAdapter) Next() bool { return a.stream.Next() }
-func (a *openAIStreamAdapter) Err() error { return a.stream.Err() }
+func (a *openAIStreamAdapter) Err() error { return llm.NormalizeHTTPError(a.stream.Err()) }
 func (a *openAIStreamAdapter) Current() *interfaces.LLMStreamChunk {
 	chunk := a.stream.Current()
 	a.acc.AddChunk(chunk)
@@ -256,7 +256,7 @@ func messagesToOpenAI(req *interfaces.LLMRequest) []openai.ChatCompletionMessage
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "user":
-			out = append(out, openai.UserMessage(m.Content))
+			out = append(out, openAIUserMessage(m.Content, m.Images))
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
 				toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, len(m.ToolCalls))
@@ -291,9 +291,30 @@ func messagesToOpenAI(req *interfaces.LLMRequest) []openai.ChatCompletionMessage
 			}
 		case "tool":
 			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
+			if len(m.Images) > 0 {
+				out = append(out, openAIUserMessage("", m.Images))
+			}
 		}
 	}
 	return out
+}
+
+func openAIUserMessage(content string, images []interfaces.Image) openai.ChatCompletionMessageParamUnion {
+	if len(images) == 0 {
+		return openai.UserMessage(content)
+	}
+
+	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(images)+1)
+	if content != "" {
+		parts = append(parts, openai.TextContentPart(content))
+	}
+	for _, image := range images {
+		parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+			URL: "data:" + image.MIME + ";base64," + image.Data,
+		}))
+	}
+
+	return openai.UserMessage(parts)
 }
 
 func toolsToOpenAI(specs []interfaces.ToolSpec) []openai.ChatCompletionToolUnionParam {
